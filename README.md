@@ -29,6 +29,7 @@ Studio 24 uses:
 - `@openai/agents` for the deck-planning agent.
 - `pptxgenjs` for creating editable `.pptx` files in Node.js.
 - Vercel Blob for storing generated deck files.
+- Hosted Postgres, such as Neon through Vercel Marketplace, for recent deck history.
 - A shared password and signed HTTP-only cookie for simple access control.
 - Vitest for focused unit tests.
 
@@ -39,9 +40,9 @@ The app is designed to run on Vercel using Node.js serverless functions. It does
 There are two main parts:
 
 - The browser UI, where the user signs in, writes a prompt, and downloads a generated deck.
-- The server routes, where auth, agent execution, PowerPoint generation, and Blob upload happen.
+- The server routes, where auth, agent execution, PowerPoint generation, Blob upload, and deck-history reads happen.
 
-The browser never receives the OpenAI API key, Blob token, or session secret. Those stay on the server.
+The browser never receives the OpenAI API key, Blob token, database URL, or session secret. Those stay on the server.
 
 ### 1. Sign In
 
@@ -89,7 +90,7 @@ The server checks three things before generating a deck:
 
 - The auth cookie is valid.
 - The prompt is valid JSON and is between 8 and 8000 characters.
-- The required server environment variables are present.
+- The required generation environment variables are present.
 
 If any of those checks fail, the route returns an error and does not call OpenAI or write a file.
 
@@ -177,9 +178,25 @@ The API response looks like:
 }
 ```
 
-The UI shows a download card for the latest result. It also saves a short recent-decks list in browser local storage for convenience.
+The UI shows a download card for the latest result.
 
-There is no database in v1. Generated deck history is not stored in the app server.
+### 7. The Deck Metadata Is Saved To Postgres
+
+After the file is uploaded to Vercel Blob, the app tries to save a small history record in Postgres.
+
+The database record stores:
+
+- Deck title.
+- Slide count.
+- Blob download URL.
+- File name.
+- Creation time.
+
+The `.pptx` file itself is not stored in the database. The database only stores metadata and the Blob URL.
+
+Studio 24 uses `DATABASE_URL` to connect to Postgres. A Neon Postgres database from Vercel Marketplace is the intended hosted setup.
+
+If `DATABASE_URL` is not configured, deck generation still works, but the Recent decks panel has no persistent server-side history.
 
 ## API Routes
 
@@ -267,6 +284,33 @@ export const maxDuration = 300;
 
 The 300-second max duration gives the agent and PowerPoint generation enough room for slower deck requests.
 
+### `GET /api/decks/recent`
+
+Returns recent generated decks from Postgres.
+
+Success response:
+
+```json
+{
+  "configured": true,
+  "decks": [
+    {
+      "id": "deck-history-id",
+      "title": "Deck title",
+      "slideCount": 4,
+      "blobUrl": "https://...",
+      "fileName": "deck-file-name.pptx",
+      "createdAt": "2026-04-21T04:00:00.000Z"
+    }
+  ]
+}
+```
+
+Common errors:
+
+- `401` if the user is not signed in.
+- `500` if the database is configured but cannot be reached.
+
 ## Environment Variables
 
 Create `.env.local` for local development:
@@ -282,6 +326,7 @@ OPENAI_API_KEY=
 BLOB_READ_WRITE_TOKEN=
 APP_PASSWORD=
 APP_SESSION_SECRET=
+DATABASE_URL=
 ```
 
 What each variable does:
@@ -290,6 +335,7 @@ What each variable does:
 - `BLOB_READ_WRITE_TOKEN` lets the server upload generated `.pptx` files to Vercel Blob.
 - `APP_PASSWORD` is the shared password for the app.
 - `APP_SESSION_SECRET` signs and verifies the auth cookie.
+- `DATABASE_URL` connects the app to hosted Postgres for recent deck history.
 
 Do not commit `.env.local`. It contains secrets and is ignored by git.
 
@@ -329,16 +375,19 @@ The app is deployed to Vercel:
 https://studio-24.vercel.app
 ```
 
-The Vercel project needs the same four environment variables:
+The Vercel project needs these environment variables:
 
 ```text
 OPENAI_API_KEY
 BLOB_READ_WRITE_TOKEN
 APP_PASSWORD
 APP_SESSION_SECRET
+DATABASE_URL
 ```
 
 The project also needs a connected Vercel Blob store. The Blob integration provides `BLOB_READ_WRITE_TOKEN`.
+
+For deck history, connect a hosted Postgres database. The intended setup is Neon Postgres through Vercel Marketplace. After the database is connected to the Vercel project, make sure `DATABASE_URL` is available in the production environment.
 
 The repo includes `.vercelignore` so local env files and build artifacts are not uploaded during CLI deploys:
 
@@ -435,6 +484,14 @@ Check `BLOB_READ_WRITE_TOKEN`.
 
 Make sure the Vercel project has a connected Blob store and the token is available to the environment you deployed.
 
+### Recent decks do not appear
+
+Check `DATABASE_URL`.
+
+Make sure the Vercel project has a hosted Postgres database connected and that the production deployment can read the database environment variable.
+
+The app creates the `deck_history` table automatically the first time it reads or writes deck history.
+
 ### The generated deck downloads but looks simple
 
 That is expected in v1. The app uses simple built-in themes and layout presets. It does not import a company template or perform advanced design polish yet.
@@ -444,7 +501,7 @@ That is expected in v1. The app uses simple built-in themes and layout presets. 
 - Creates new decks only.
 - Does not edit existing `.pptx` files.
 - Does not upload or read PowerPoint templates.
-- Does not store a server-side deck history.
+- Stores only recent deck metadata, not full project history or per-user history.
 - Uses simple themes and layout presets.
 - Uses one shared password instead of per-user accounts.
 

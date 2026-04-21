@@ -14,6 +14,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "@openai/agents": "^0.8.5",
     "@vercel/blob": "^2.3.3",
     "lucide-react": "^1.8.0",

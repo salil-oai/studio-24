@@ -17,6 +17,12 @@ type DeckResult = {
   slideCount: number;
   blobUrl: string;
   fileName: string;
+  createdAt?: string;
+};
+
+type RecentDecksResponse = {
+  configured: boolean;
+  decks: DeckResult[];
 };
 
 type ApiError = {
@@ -28,28 +34,6 @@ const EXAMPLE_PROMPTS = [
   "Create a technical deck explaining how an agent turns a user prompt into an editable PowerPoint file using tools, validation, and storage.",
   "Create a modern product strategy deck for Studio 24, focused on prompt-to-PowerPoint generation for busy operators.",
 ];
-
-function readRecentDecks(): DeckResult[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem("studio24.recentDecks");
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.slice(0, 4) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeRecentDecks(decks: DeckResult[]) {
-  try {
-    window.localStorage.setItem(
-      "studio24.recentDecks",
-      JSON.stringify(decks.slice(0, 4)),
-    );
-  } catch {
-    // Recent decks are a convenience only.
-  }
-}
 
 async function parseError(response: Response): Promise<string> {
   try {
@@ -70,16 +54,60 @@ export function StudioClient({
   const [prompt, setPrompt] = useState(EXAMPLE_PROMPTS[0]);
   const [result, setResult] = useState<DeckResult | null>(null);
   const [recentDecks, setRecentDecks] = useState<DeckResult[]>([]);
+  const [historyConfigured, setHistoryConfigured] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isLoadingRecent, setIsLoadingRecent] = useState(false);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setRecentDecks(readRecentDecks());
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, []);
+    if (!authenticated) {
+      return;
+    }
+
+    let canceled = false;
+
+    async function loadRecentDecks() {
+      setIsLoadingRecent(true);
+      try {
+        const response = await fetch("/api/decks/recent", {
+          cache: "no-store",
+        });
+
+        if (response.status === 401) {
+          if (!canceled) {
+            setRecentDecks([]);
+            setAuthenticated(false);
+          }
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(await parseError(response));
+        }
+
+        const body = (await response.json()) as RecentDecksResponse;
+        if (!canceled) {
+          setHistoryConfigured(body.configured);
+          setRecentDecks(body.decks);
+        }
+      } catch {
+        if (!canceled) {
+          setRecentDecks([]);
+        }
+      } finally {
+        if (!canceled) {
+          setIsLoadingRecent(false);
+        }
+      }
+    }
+
+    void loadRecentDecks();
+
+    return () => {
+      canceled = true;
+    };
+  }, [authenticated]);
 
   const promptLength = prompt.trim().length;
   const canGenerate = authenticated && promptLength >= 8 && !isGenerating;
@@ -119,6 +147,8 @@ export function StudioClient({
     await fetch("/api/auth", { method: "DELETE" });
     setAuthenticated(false);
     setResult(null);
+    setRecentDecks([]);
+    setHistoryConfigured(true);
   }
 
   async function handleGenerate(event: FormEvent<HTMLFormElement>) {
@@ -135,6 +165,7 @@ export function StudioClient({
       });
 
       if (response.status === 401) {
+        setRecentDecks([]);
         setAuthenticated(false);
       }
       if (!response.ok) {
@@ -143,12 +174,12 @@ export function StudioClient({
 
       const deck = (await response.json()) as DeckResult;
       setResult(deck);
-      const nextRecent = [
-        deck,
-        ...recentDecks.filter((item) => item.blobUrl !== deck.blobUrl),
-      ].slice(0, 4);
-      setRecentDecks(nextRecent);
-      writeRecentDecks(nextRecent);
+      setRecentDecks((currentDecks) =>
+        [
+          deck,
+          ...currentDecks.filter((item) => item.blobUrl !== deck.blobUrl),
+        ].slice(0, 4),
+      );
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Deck generation failed.",
@@ -333,9 +364,21 @@ export function StudioClient({
                 Recent decks
               </h2>
               <div className="mt-4 space-y-3">
-                {recentDecks.length === 0 ? (
+                {!historyConfigured ? (
                   <p className="text-sm leading-6 text-stone-500">
-                    Generated decks will appear here for this browser.
+                    Deck history storage is not connected yet.
+                  </p>
+                ) : isLoadingRecent ? (
+                  <div className="flex items-center gap-2 text-sm text-stone-500">
+                    <Loader2
+                      className="h-4 w-4 animate-spin"
+                      aria-hidden="true"
+                    />
+                    Loading recent decks
+                  </div>
+                ) : recentDecks.length === 0 ? (
+                  <p className="text-sm leading-6 text-stone-500">
+                    Generated decks will appear here after they are saved.
                   </p>
                 ) : (
                   recentDecks.map((deck) => (

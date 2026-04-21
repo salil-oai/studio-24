@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AUTH_COOKIE_NAME, verifyAuthToken } from "@/lib/auth";
 import { generateDeckWithAgent } from "@/lib/agent/deck-agent";
+import { saveDeckToHistory } from "@/lib/deck/history";
 import { generateDeckRequestSchema } from "@/lib/deck/schema";
 import { requireEnv } from "@/lib/env";
 
@@ -32,6 +33,11 @@ export async function POST(request: NextRequest) {
     requireEnv("OPENAI_API_KEY");
     requireEnv("BLOB_READ_WRITE_TOKEN");
     const deck = await generateDeckWithAgent(parsed.data.prompt);
+    try {
+      await saveDeckToHistory(deck);
+    } catch (historyError) {
+      console.warn("Could not save deck history.", historyError);
+    }
     return NextResponse.json(deck);
   } catch (error) {
     return NextResponse.json(
