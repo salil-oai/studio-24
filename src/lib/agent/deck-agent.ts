@@ -3,7 +3,7 @@ import { buildPptxDeck } from "@/lib/deck/pptx";
 import { deckSpecSchema, parseDeckSpec } from "@/lib/deck/schema";
 import { uploadDeckToBlob, type StoredDeck } from "@/lib/deck/storage";
 
-const MODEL = "gpt-5.4";
+const MODEL = "crest-alpha";
 
 function buildAgentInstructions() {
   return [

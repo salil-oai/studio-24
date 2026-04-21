@@ -108,7 +108,7 @@ The agent must call this tool exactly once. The tool input is validated with a s
 The agent uses model:
 
 ```text
-gpt-5.4
+crest-alpha
 ```
 
 ### 4. The Tool Receives A Deck Spec
