@@ -29,7 +29,11 @@ Studio 24 uses:
 - `@openai/agents` for the deck-planning agent.
 - `pptxgenjs` for creating editable `.pptx` files in Node.js.
 - Vercel Blob for storing generated deck files.
+- Local filesystem storage for generated decks during local development.
 - Hosted Postgres, such as Neon through Vercel Marketplace, for recent deck history.
+- Local Postgres for development.
+- Vercel Sandbox for isolated sub-agent runs in deployed environments.
+- Docker for the same isolated sub-agent worker during local development.
 - A shared password and signed HTTP-only cookie for simple access control.
 - Vitest for focused unit tests.
 
@@ -151,7 +155,9 @@ The temporary file is only an intermediate step. It is not meant to be permanent
 
 ### 6. The Deck Is Uploaded To Vercel Blob
 
-After the `.pptx` file is created, the server reads it and uploads it to Vercel Blob.
+After the `.pptx` file is created, the server stores it.
+
+In production, the server reads the file and uploads it to Vercel Blob.
 
 The upload uses:
 
@@ -166,6 +172,20 @@ decks/
 ```
 
 The upload is public so the browser can download the file from the returned URL.
+
+In local development, the server can skip Vercel Blob and copy the file into:
+
+```text
+public/generated/decks
+```
+
+Those files are served by Next.js at:
+
+```text
+/generated/decks/{fileName}
+```
+
+This lets you generate and download decks locally without using Blob storage.
 
 The API response looks like:
 
@@ -197,6 +217,57 @@ The `.pptx` file itself is not stored in the database. The database only stores 
 Studio 24 uses `DATABASE_URL` to connect to Postgres. A Neon Postgres database from Vercel Marketplace is the intended hosted setup.
 
 If `DATABASE_URL` is not configured, deck generation still works, but the Recent decks panel has no persistent server-side history.
+
+### 8. Sandboxed Sub-Agent Smoke Flow
+
+Studio 24 now has a sandbox runtime for agent and sub-agent work.
+
+The first sandboxed flow is intentionally small. It runs a test sub-agent, returns a short result, and proves that the app can safely start isolated agent work before the full deck-generation flow is moved into that boundary.
+
+The host app does this:
+
+- Checks the same signed auth cookie.
+- Builds a small sandbox job.
+- Chooses the sandbox driver.
+- Sends only the safe job input and model env vars.
+- Receives structured JSON back from the sandbox.
+- Keeps Blob, Postgres, app password, and session secrets on the host.
+
+Local development uses Docker:
+
+```text
+SANDBOX_DRIVER=docker
+```
+
+Vercel deployment uses Vercel Sandbox:
+
+```text
+SANDBOX_DRIVER=vercel
+```
+
+If `SANDBOX_DRIVER` is not set, the app chooses Docker outside Vercel and Vercel Sandbox inside Vercel.
+
+The sandbox gets only:
+
+```text
+OPENAI_API_KEY
+OPENAI_MODEL
+OPENAI_BASE_URL
+```
+
+The sandbox does not receive:
+
+```text
+BLOB_READ_WRITE_TOKEN
+DATABASE_URL
+APP_PASSWORD
+APP_SESSION_SECRET
+VERCEL_OIDC_TOKEN
+```
+
+That means generated files and database writes stay host-side. The sandbox is disposable.
+
+Vercel Sandbox snapshots are used like Docker images. A snapshot pre-installs the worker dependencies so production does not need to install packages from scratch on every run.
 
 ## API Routes
 
@@ -311,6 +382,47 @@ Common errors:
 - `401` if the user is not signed in.
 - `500` if the database is configured but cannot be reached.
 
+### `POST /api/sandbox/smoke`
+
+Runs a sandboxed sub-agent smoke test.
+
+Input:
+
+```json
+{
+  "mode": "mock",
+  "prompt": "Optional short task for the sub-agent"
+}
+```
+
+`mode` can be:
+
+- `mock` to test container startup, file transfer, output parsing, and secret isolation without calling OpenAI.
+- `live` to run a real Agents SDK sub-agent with `OPENAI_API_KEY`.
+
+Success response:
+
+```json
+{
+  "ok": true,
+  "driver": "docker",
+  "durationMs": 1234,
+  "subAgentResult": {
+    "mode": "mock",
+    "model": "crest-alpha",
+    "outputText": "Mock sandbox sub-agent received...",
+    "sdkLoaded": true,
+    "forbiddenEnvPresent": []
+  }
+}
+```
+
+Common errors:
+
+- `401` if the user is not signed in.
+- `400` if the JSON body, mode, or prompt is invalid.
+- `500` if Docker, Vercel Sandbox, the worker, or the live model call fails.
+
 ## Environment Variables
 
 Create `.env.local` for local development:
@@ -326,16 +438,32 @@ OPENAI_API_KEY=
 BLOB_READ_WRITE_TOKEN=
 APP_PASSWORD=
 APP_SESSION_SECRET=
-DATABASE_URL=
+DATABASE_URL=postgres://salil@localhost:5432/studio24
+DECK_STORAGE_DRIVER=local
+LOCAL_DECK_STORAGE_DIR=public/generated/decks
+LOCAL_DECK_PUBLIC_BASE_URL=/generated/decks
+SANDBOX_DRIVER=docker
+SANDBOX_SNAPSHOT_ID=
+SANDBOX_TIMEOUT_MS=120000
+SANDBOX_DOCKER_IMAGE=studio-24-agent-sandbox:local
+OPENAI_MODEL=crest-alpha
 ```
 
 What each variable does:
 
 - `OPENAI_API_KEY` lets the server call the OpenAI Agents SDK.
-- `BLOB_READ_WRITE_TOKEN` lets the server upload generated `.pptx` files to Vercel Blob.
+- `BLOB_READ_WRITE_TOKEN` lets the server upload generated `.pptx` files to Vercel Blob. It is required when `DECK_STORAGE_DRIVER` is `vercel-blob`.
 - `APP_PASSWORD` is the shared password for the app.
 - `APP_SESSION_SECRET` signs and verifies the auth cookie.
-- `DATABASE_URL` connects the app to hosted Postgres for recent deck history.
+- `DATABASE_URL` connects the app to Postgres for recent deck history.
+- `DECK_STORAGE_DRIVER` chooses where generated deck files go. Use `local` on your laptop and `vercel-blob` on Vercel.
+- `LOCAL_DECK_STORAGE_DIR` is the local folder where generated `.pptx` files are copied.
+- `LOCAL_DECK_PUBLIC_BASE_URL` is the browser URL prefix for those local files.
+- `SANDBOX_DRIVER` chooses the sandbox backend. Use `docker` locally and `vercel` on Vercel.
+- `SANDBOX_SNAPSHOT_ID` points Vercel Sandbox at a prepared snapshot with worker dependencies installed.
+- `SANDBOX_TIMEOUT_MS` caps sandbox startup and worker runtime.
+- `SANDBOX_DOCKER_IMAGE` names the local Docker image for the sandbox worker.
+- `OPENAI_MODEL` chooses the model used by the sandbox smoke sub-agent. It defaults to `crest-alpha`.
 
 Do not commit `.env.local`. It contains secrets and is ignored by git.
 
@@ -353,10 +481,32 @@ Create your local env file:
 cp .env.example .env.local
 ```
 
+Set the local database URL in `.env.local`:
+
+```text
+DATABASE_URL=postgres://salil@localhost:5432/studio24
+```
+
+Set local deck file storage in `.env.local`:
+
+```text
+DECK_STORAGE_DRIVER=local
+LOCAL_DECK_STORAGE_DIR=public/generated/decks
+LOCAL_DECK_PUBLIC_BASE_URL=/generated/decks
+```
+
+Create and check the local Postgres database:
+
+```bash
+pnpm db:setup
+```
+
+That command creates the `studio24` database if needed and creates the `deck_history` table.
+
 Start the app:
 
 ```bash
-pnpm dev
+pnpm dev:local
 ```
 
 Open:
@@ -366,6 +516,28 @@ http://localhost:3000
 ```
 
 Use the value from `APP_PASSWORD` to sign in.
+
+Local generated `.pptx` files are written under `public/generated/decks`. That folder is ignored by git and by Vercel deploys.
+
+Build the local sandbox image:
+
+```bash
+pnpm sandbox:docker:build
+```
+
+Run the Docker sandbox smoke test without calling OpenAI:
+
+```bash
+pnpm sandbox:smoke:docker
+```
+
+Run the Docker sandbox smoke test with a real Agents SDK model call:
+
+```bash
+pnpm sandbox:smoke:docker:live
+```
+
+The smoke worker writes output into a temporary host directory, then the runner reads the result and deletes the directory. Set `SANDBOX_KEEP_JOB_DIR=1` only when debugging.
 
 ## Vercel Deployment
 
@@ -383,11 +555,60 @@ BLOB_READ_WRITE_TOKEN
 APP_PASSWORD
 APP_SESSION_SECRET
 DATABASE_URL
+SANDBOX_DRIVER
+SANDBOX_SNAPSHOT_ID
+SANDBOX_TIMEOUT_MS
+OPENAI_MODEL
 ```
 
 The project also needs a connected Vercel Blob store. The Blob integration provides `BLOB_READ_WRITE_TOKEN`.
 
+On Vercel, leave `DECK_STORAGE_DRIVER` unset or set it to:
+
+```text
+vercel-blob
+```
+
 For deck history, connect a hosted Postgres database. The intended setup is Neon Postgres through Vercel Marketplace. After the database is connected to the Vercel project, make sure `DATABASE_URL` is available in the production environment.
+
+For sandboxed sub-agents, set:
+
+```text
+SANDBOX_DRIVER=vercel
+```
+
+Production Vercel Sandbox runs should also set:
+
+```text
+SANDBOX_SNAPSHOT_ID=snap_...
+```
+
+Create that snapshot from a local machine that is linked to the Vercel project:
+
+```bash
+pnpm sandbox:snapshot:create
+```
+
+The command creates a Vercel Sandbox, installs the worker dependencies, saves a snapshot, and prints the `SANDBOX_SNAPSHOT_ID` value to add in Vercel project env vars.
+
+Run a Vercel Sandbox smoke test without calling OpenAI:
+
+```bash
+pnpm sandbox:smoke:vercel
+```
+
+Run a Vercel Sandbox smoke test with a real Agents SDK model call:
+
+```bash
+pnpm sandbox:smoke:vercel:live
+```
+
+Helpful Vercel docs:
+
+- [Vercel Sandbox concepts](https://vercel.com/docs/vercel-sandbox/concepts)
+- [Vercel Sandbox snapshots](https://vercel.com/docs/vercel-sandbox/concepts/snapshots)
+- [Vercel Sandbox SDK reference](https://vercel.com/docs/vercel-sandbox/sdk-reference)
+- [Vercel Sandbox firewall](https://vercel.com/docs/vercel-sandbox/concepts/firewall)
 
 The repo includes `.vercelignore` so local env files and build artifacts are not uploaded during CLI deploys:
 
@@ -441,6 +662,8 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm sandbox:docker:build
+pnpm sandbox:smoke:docker
 ```
 
 What these checks cover:
@@ -449,6 +672,15 @@ What these checks cover:
 - `pnpm typecheck` checks TypeScript types.
 - `pnpm test` runs unit tests for auth, deck schema validation, and PPTX generation.
 - `pnpm build` verifies the Next.js production build.
+- `pnpm sandbox:docker:build` builds the local sandbox image.
+- `pnpm sandbox:smoke:docker` verifies the local isolated worker path without an OpenAI call.
+
+Use the live smoke checks when you specifically want to verify model calls:
+
+```bash
+pnpm sandbox:smoke:docker:live
+pnpm sandbox:smoke:vercel:live
+```
 
 ## Troubleshooting
 
@@ -492,6 +724,42 @@ Make sure the Vercel project has a hosted Postgres database connected and that t
 
 The app creates the `deck_history` table automatically the first time it reads or writes deck history.
 
+### Docker sandbox smoke fails
+
+First build the image:
+
+```bash
+pnpm sandbox:docker:build
+```
+
+Then run:
+
+```bash
+pnpm sandbox:smoke:docker
+```
+
+For live sub-agent calls, check `OPENAI_API_KEY`.
+
+### Vercel Sandbox smoke fails
+
+Check that the Vercel project is linked and that the local env has Vercel Sandbox auth.
+
+For production, check `SANDBOX_SNAPSHOT_ID`. The app requires a snapshot in production so it does not install worker dependencies from scratch on every request.
+
+If the snapshot is stale, recreate it:
+
+```bash
+pnpm sandbox:snapshot:create
+```
+
+Then update `SANDBOX_SNAPSHOT_ID` in Vercel and redeploy.
+
+### The sandbox says forbidden env vars are present
+
+The worker returns `forbiddenEnvPresent` so tests can prove secret isolation.
+
+That list should be empty. If it is not empty, the host is passing storage, database, auth, or Vercel auth secrets into the sandbox and the env whitelist should be fixed before using the sandbox for real work.
+
 ### The generated deck downloads but looks simple
 
 That is expected in v1. The app uses simple built-in themes and layout presets. It does not import a company template or perform advanced design polish yet.
@@ -504,6 +772,7 @@ That is expected in v1. The app uses simple built-in themes and layout presets. 
 - Stores only recent deck metadata, not full project history or per-user history.
 - Uses simple themes and layout presets.
 - Uses one shared password instead of per-user accounts.
+- The sandbox flow is currently a sub-agent smoke test. Full deck generation still runs host-side until the sandbox boundary is proven stable.
 
 ## Repository Notes
 

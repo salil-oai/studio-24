@@ -1,7 +1,7 @@
 import { Agent, run, tool } from "@openai/agents";
 import { buildPptxDeck } from "@/lib/deck/pptx";
 import { deckSpecSchema, parseDeckSpec } from "@/lib/deck/schema";
-import { uploadDeckToBlob, type StoredDeck } from "@/lib/deck/storage";
+import { storeDeck, type StoredDeck } from "@/lib/deck/storage";
 
 const MODEL = "crest-alpha";
 
@@ -39,7 +39,7 @@ export async function generateDeckWithAgent(prompt: string): Promise<StoredDeck>
     async execute(input) {
       const spec = parseDeckSpec(input);
       const deck = await buildPptxDeck(spec);
-      createdDeck = await uploadDeckToBlob(deck);
+      createdDeck = await storeDeck(deck);
       return createdDeck;
     },
   });

@@ -20,6 +20,10 @@
 # production
 /build
 
+# local generated decks
+/public/generated/decks/*
+!/public/generated/decks/.gitkeep
+
 # misc
 .DS_Store
 *.pem

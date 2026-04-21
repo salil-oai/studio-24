@@ -1,0 +1,11 @@
+.git
+.next
+.vercel
+node_modules
+public/generated/decks/*
+!.gitkeep
+.env*
+!.env.example
+coverage
+*.tsbuildinfo
+README.md

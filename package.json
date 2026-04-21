@@ -6,19 +6,29 @@
     "node": ">=22"
   },
   "scripts": {
+    "db:setup": "node scripts/setup-local-db.mjs",
     "dev": "next dev",
+    "dev:local": "pnpm db:setup && next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "sandbox:docker:build": "node scripts/sandbox-docker-build.mjs",
+    "sandbox:smoke:docker": "node scripts/sandbox-smoke-docker.mjs",
+    "sandbox:smoke:docker:live": "node scripts/sandbox-smoke-docker.mjs --live",
+    "sandbox:smoke:vercel": "node scripts/sandbox-smoke-vercel.mjs",
+    "sandbox:smoke:vercel:live": "node scripts/sandbox-smoke-vercel.mjs --live",
+    "sandbox:snapshot:create": "node scripts/sandbox-snapshot-create.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
     "@openai/agents": "^0.8.5",
     "@vercel/blob": "^2.3.3",
+    "@vercel/sandbox": "1.10.0",
     "lucide-react": "^1.8.0",
     "next": "16.2.4",
+    "postgres": "^3.4.9",
     "pptxgenjs": "^4.0.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",

@@ -1,11 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { neon } from "@neondatabase/serverless";
+import postgres from "postgres";
 import { getOptionalEnv } from "@/lib/env";
 import type { StoredDeck } from "@/lib/deck/storage";
 
 const RECENT_DECK_LIMIT = 4;
 
-type SqlClient = ReturnType<typeof neon>;
+type QueryRows = Record<string, unknown>[];
+type SqlClient = (
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => Promise<QueryRows>;
 
 type DeckHistoryRow = {
   id: string;
@@ -26,11 +31,38 @@ export type DeckHistoryResult = {
   decks: DeckHistoryItem[];
 };
 
-let tableReady: Promise<void> | null = null;
+let tableReady:
+  | {
+      databaseUrl: string;
+      promise: Promise<void>;
+    }
+  | null = null;
+let localSqlClient: SqlClient | null = null;
+let localSqlClientUrl: string | null = null;
+
+function isLocalDatabaseUrl(databaseUrl: string): boolean {
+  try {
+    const url = new URL(databaseUrl);
+    return ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
 
 function getSqlClient(): SqlClient | null {
   const databaseUrl = getOptionalEnv("DATABASE_URL");
-  return databaseUrl ? neon(databaseUrl) : null;
+  if (!databaseUrl) return null;
+
+  if (isLocalDatabaseUrl(databaseUrl)) {
+    if (!localSqlClient || localSqlClientUrl !== databaseUrl) {
+      localSqlClient = postgres(databaseUrl, { max: 1 }) as unknown as SqlClient;
+      localSqlClientUrl = databaseUrl;
+    }
+
+    return localSqlClient;
+  }
+
+  return neon(databaseUrl) as SqlClient;
 }
 
 function mapDeckHistoryRow(row: DeckHistoryRow): DeckHistoryItem {
@@ -44,27 +76,35 @@ function mapDeckHistoryRow(row: DeckHistoryRow): DeckHistoryItem {
   };
 }
 
-async function ensureDeckHistoryTable(sql: SqlClient): Promise<void> {
-  tableReady ??= (async () => {
-    await sql`
-      CREATE TABLE IF NOT EXISTS deck_history (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        slide_count INTEGER NOT NULL,
-        blob_url TEXT NOT NULL UNIQUE,
-        file_name TEXT NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `;
+async function ensureDeckHistoryTable(
+  sql: SqlClient,
+  databaseUrl: string,
+): Promise<void> {
+  if (tableReady?.databaseUrl !== databaseUrl) {
+    tableReady = {
+      databaseUrl,
+      promise: (async () => {
+        await sql`
+          CREATE TABLE IF NOT EXISTS deck_history (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            slide_count INTEGER NOT NULL,
+            blob_url TEXT NOT NULL UNIQUE,
+            file_name TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `;
 
-    await sql`
-      CREATE INDEX IF NOT EXISTS deck_history_created_at_idx
-      ON deck_history (created_at DESC)
-    `;
-  })();
+        await sql`
+          CREATE INDEX IF NOT EXISTS deck_history_created_at_idx
+          ON deck_history (created_at DESC)
+        `;
+      })(),
+    };
+  }
 
   try {
-    await tableReady;
+    await tableReady.promise;
   } catch (error) {
     tableReady = null;
     throw error;
@@ -78,10 +118,11 @@ export function isDeckHistoryConfigured(): boolean {
 export async function saveDeckToHistory(
   deck: StoredDeck,
 ): Promise<DeckHistoryItem | null> {
+  const databaseUrl = getOptionalEnv("DATABASE_URL");
   const sql = getSqlClient();
-  if (!sql) return null;
+  if (!databaseUrl || !sql) return null;
 
-  await ensureDeckHistoryTable(sql);
+  await ensureDeckHistoryTable(sql, databaseUrl);
 
   const rows = (await sql`
     INSERT INTO deck_history (
@@ -111,12 +152,13 @@ export async function saveDeckToHistory(
 export async function listRecentDecks(
   limit = RECENT_DECK_LIMIT,
 ): Promise<DeckHistoryResult> {
+  const databaseUrl = getOptionalEnv("DATABASE_URL");
   const sql = getSqlClient();
-  if (!sql) {
+  if (!databaseUrl || !sql) {
     return { configured: false, decks: [] };
   }
 
-  await ensureDeckHistoryTable(sql);
+  await ensureDeckHistoryTable(sql, databaseUrl);
 
   const requestedLimit = Number.isFinite(limit)
     ? Math.trunc(limit)
