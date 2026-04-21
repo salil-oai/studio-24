@@ -349,6 +349,38 @@ The repo includes `.vercelignore` so local env files and build artifacts are not
 node_modules
 ```
 
+### GitHub Actions Deployment
+
+The repo includes a GitHub Actions workflow at:
+
+```text
+.github/workflows/vercel-production.yml
+```
+
+The workflow runs on every push to `main`. It can also be started manually from the GitHub Actions tab.
+
+The workflow does the same production deployment flow that works from a local terminal:
+
+1. Checks out the repository.
+2. Installs the Vercel CLI.
+3. Pulls the production Vercel project settings.
+4. Builds the app with `vercel build --prod`.
+5. Deploys the prebuilt output with `vercel deploy --prebuilt --prod`.
+
+The workflow needs these GitHub repository secrets:
+
+```text
+VERCEL_TOKEN
+VERCEL_ORG_ID
+VERCEL_PROJECT_ID
+```
+
+`VERCEL_TOKEN` should be a Vercel access token that can deploy this project.
+
+`VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` identify the Vercel team and project. They are available in the local `.vercel/project.json` file after running `vercel link`, or in the Vercel project settings.
+
+Do not commit `.vercel`, `.env.local`, or any secret values. The workflow reads its deployment credentials from GitHub secrets.
+
 ## Checks
 
 Run the full local check suite before pushing or deploying:
