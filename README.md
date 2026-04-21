@@ -48,6 +48,8 @@ There are two main parts:
 
 The browser never receives the OpenAI API key, Blob token, database URL, or session secret. Those stay on the server.
 
+There is also a separate sandbox path for agent and sub-agent isolation. Today, the sandbox path is a smoke-tested sub-agent runner. It proves that Studio 24 can start an isolated agent process locally in Docker and in production with Vercel Sandbox. The main deck-generation path still runs on the host server in v1.
+
 ### 1. Sign In
 
 The app uses one shared password.
@@ -268,6 +270,18 @@ VERCEL_OIDC_TOKEN
 That means generated files and database writes stay host-side. The sandbox is disposable.
 
 Vercel Sandbox snapshots are used like Docker images. A snapshot pre-installs the worker dependencies so production does not need to install packages from scratch on every run.
+
+The smoke flow has two modes:
+
+- `mock` loads the Agents SDK inside the sandbox but does not call OpenAI. Use this for fast isolation checks.
+- `live` loads the Agents SDK and calls the configured model. Use this to verify the real agent path.
+
+The response includes `forbiddenEnvPresent`. That array should always be empty. It is a direct check that host-only values like Blob, Postgres, app auth, and Vercel auth secrets were not passed into the sandbox.
+
+The same worker file is used in both places:
+
+- Docker runs `sandbox/worker.mjs` from a small local image built from `sandbox/Dockerfile`.
+- Vercel Sandbox runs `sandbox/worker.mjs` from a prepared Sandbox snapshot, or from a fresh Sandbox only for local/manual testing.
 
 ## API Routes
 
@@ -539,6 +553,39 @@ pnpm sandbox:smoke:docker:live
 
 The smoke worker writes output into a temporary host directory, then the runner reads the result and deletes the directory. Set `SANDBOX_KEEP_JOB_DIR=1` only when debugging.
 
+### Local End-To-End Check
+
+For a full local check, run:
+
+```bash
+pnpm db:setup
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm sandbox:docker:build
+pnpm sandbox:smoke:docker
+pnpm sandbox:smoke:docker:live
+pnpm dev:local
+```
+
+Then open:
+
+```text
+http://127.0.0.1:3000
+```
+
+A healthy local run means:
+
+- Sign-in works with `APP_PASSWORD`.
+- `GET /api/decks/recent` returns `configured: true` when Postgres is running.
+- `POST /api/sandbox/smoke` returns `driver: "docker"`.
+- Both sandbox smoke modes return `sdkLoaded: true`.
+- `forbiddenEnvPresent` is empty.
+- Deck generation writes a `.pptx` under `public/generated/decks`.
+- The generated deck URL starts with `/generated/decks/`.
+- The Recent decks panel shows the new deck from Postgres history.
+
 ## Vercel Deployment
 
 The app is deployed to Vercel:
@@ -591,6 +638,8 @@ pnpm sandbox:snapshot:create
 
 The command creates a Vercel Sandbox, installs the worker dependencies, saves a snapshot, and prints the `SANDBOX_SNAPSHOT_ID` value to add in Vercel project env vars.
 
+The production sandbox path should use a snapshot. That keeps production from installing worker packages during every request. If `SANDBOX_SNAPSHOT_ID` is missing in production, the app fails fast instead of silently using a slow fresh setup.
+
 Run a Vercel Sandbox smoke test without calling OpenAI:
 
 ```bash
@@ -602,6 +651,32 @@ Run a Vercel Sandbox smoke test with a real Agents SDK model call:
 ```bash
 pnpm sandbox:smoke:vercel:live
 ```
+
+### Production End-To-End Check
+
+After deployment, test the production app with:
+
+```text
+POST /api/auth
+POST /api/sandbox/smoke
+POST /api/decks/generate
+GET /api/decks/recent
+```
+
+A healthy production run means:
+
+- Auth returns `200`.
+- Unauthenticated sandbox smoke returns `401`.
+- Invalid sandbox mode returns `400`.
+- Sandbox smoke returns `driver: "vercel"`.
+- Sandbox smoke returns `sdkLoaded: true`.
+- `forbiddenEnvPresent` is empty.
+- Live sandbox smoke uses the configured model.
+- Deck generation returns a public Vercel Blob URL.
+- Fetching that Blob URL returns a PowerPoint MIME type.
+- Recent decks returns the generated deck from Postgres.
+- Vercel runtime logs show `200` responses for auth, sandbox smoke, deck generation, and recent decks.
+- Vercel runtime logs show no recent 5xx errors.
 
 Helpful Vercel docs:
 
@@ -619,23 +694,67 @@ The repo includes `.vercelignore` so local env files and build artifacts are not
 node_modules
 ```
 
-### GitHub Actions Deployment
+### GitHub Main Deployment
 
-The repo includes a GitHub Actions workflow at:
+The Vercel project is connected to the GitHub repo:
+
+```text
+salil-oai/studio-24
+```
+
+The production branch is:
+
+```text
+main
+```
+
+When `main` is pushed to GitHub, Vercel creates a new production deployment and aliases it to:
+
+```text
+https://studio-24.vercel.app
+```
+
+This was verified after pushing commit:
+
+```text
+c4a54b4 Add sandboxed sub-agent runtime
+```
+
+That push triggered Vercel deployment:
+
+```text
+dpl_GBcjZqV5StNDzKjoq2uzBoKanfGY
+```
+
+The deployment became `Ready` and was assigned the production aliases.
+
+To check the current deployment from this repo:
+
+```bash
+pnpm dlx vercel@latest list --scope openai --cwd .
+pnpm dlx vercel@latest inspect <deployment-url-or-id> --scope openai --cwd .
+```
+
+To check runtime errors:
+
+```bash
+pnpm dlx vercel@latest logs <deployment-id> \
+  --no-follow \
+  --environment production \
+  --since 20m \
+  --query 'status:500 OR status:502 OR status:503 OR status:504' \
+  --json \
+  --scope openai \
+  --cwd .
+```
+
+The repo also includes a GitHub Actions workflow at:
 
 ```text
 .github/workflows/vercel-production.yml
 ```
 
-The workflow runs on every push to `main`. It can also be started manually from the GitHub Actions tab.
-
-The workflow does the same production deployment flow that works from a local terminal:
-
-1. Checks out the repository.
-2. Installs the Vercel CLI.
-3. Pulls the production Vercel project settings.
-4. Builds the app with `vercel build --prod`.
-5. Deploys the prebuilt output with `vercel deploy --prebuilt --prod`.
+That workflow can deploy through the Vercel CLI when the required GitHub repository secrets are configured. The Vercel Git integration above is the primary path that was verified for the latest push.
 
 The workflow needs these GitHub repository secrets:
 
