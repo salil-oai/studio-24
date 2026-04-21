@@ -14,17 +14,41 @@ jobs:
   deploy:
     name: Deploy production
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     permissions:
       contents: read
 
     env:
+      CI: "1"
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Check required Vercel secrets
+        run: |
+          missing=""
+
+          if [ -z "$VERCEL_TOKEN" ]; then
+            missing="$missing VERCEL_TOKEN"
+          fi
+
+          if [ -z "$VERCEL_ORG_ID" ]; then
+            missing="$missing VERCEL_ORG_ID"
+          fi
+
+          if [ -z "$VERCEL_PROJECT_ID" ]; then
+            missing="$missing VERCEL_PROJECT_ID"
+          fi
+
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required GitHub repository secrets:$missing"
+            exit 1
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -35,10 +59,10 @@ jobs:
         run: npm install --global vercel@latest
 
       - name: Pull Vercel production settings
-        run: vercel pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
 
       - name: Build Vercel output
-        run: vercel build --prod --token="${{ secrets.VERCEL_TOKEN }}"
+        run: vercel build --prod --token="$VERCEL_TOKEN"
 
       - name: Deploy Vercel output
-        run: vercel deploy --prebuilt --prod --token="${{ secrets.VERCEL_TOKEN }}"
+        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"

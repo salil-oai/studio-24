@@ -381,6 +381,8 @@ VERCEL_PROJECT_ID
 
 Do not commit `.vercel`, `.env.local`, or any secret values. The workflow reads its deployment credentials from GitHub secrets.
 
+If any of those three secrets are missing, the workflow stops before calling Vercel and prints a clear GitHub Actions error.
+
 ## Checks
 
 Run the full local check suite before pushing or deploying:
