@@ -12,16 +12,19 @@ describe("pptx builder", () => {
         {
           title: "Why now",
           body: ["Demand is high", "The workflow is clear"],
+          speakerNotes: null,
           layout: "bullets",
         },
         {
           title: "How it works",
           body: ["Agent plans", "Tool creates", "Blob stores"],
+          speakerNotes: null,
           layout: "two_column",
         },
         {
           title: "Launch checks",
           body: ["Auth", "Generation", "Download"],
+          speakerNotes: null,
           layout: "metrics",
         },
       ],

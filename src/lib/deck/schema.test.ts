@@ -12,12 +12,14 @@ describe("deck schema", () => {
     const slide = {
       title: "A slide",
       body: ["A useful point"],
+      speakerNotes: null,
       layout: "bullets",
     };
 
     expect(() =>
       parseDeckSpec({
         title: "Too long",
+        subtitle: null,
         theme: "modern",
         slides: Array.from({ length: 11 }, () => slide),
       }),

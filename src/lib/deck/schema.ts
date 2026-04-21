@@ -11,13 +11,13 @@ export const slideLayoutSchema = z.enum([
 export const deckSlideSchema = z.object({
   title: z.string().trim().min(1).max(90),
   body: z.array(z.string().trim().min(1).max(180)).min(1).max(8),
-  speakerNotes: z.string().trim().max(1200).optional(),
+  speakerNotes: z.string().trim().max(1200).nullable(),
   layout: slideLayoutSchema,
 });
 
 export const deckSpecSchema = z.object({
   title: z.string().trim().min(1).max(90),
-  subtitle: z.string().trim().max(180).optional(),
+  subtitle: z.string().trim().max(180).nullable(),
   theme: deckThemeSchema,
   slides: z.array(deckSlideSchema).min(3).max(10),
 });

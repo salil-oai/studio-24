@@ -13,6 +13,7 @@ function buildAgentInstructions() {
     "Use title slides, bullet slides, two-column slides, and metric-card slides as appropriate.",
     "Keep body bullets specific, short, and suitable for direct presentation use.",
     "Do not invent precise numbers, dates, customer names, or citations unless the user supplied them.",
+    "Use null for subtitle or speakerNotes when they are not needed.",
     "Use speaker notes only for brief presenter guidance.",
   ].join("\n");
 }
